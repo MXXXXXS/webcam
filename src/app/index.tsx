@@ -4,55 +4,89 @@ import io from "socket.io-client";
 
 const socket = io();
 
+const streamAndRecorderPromise = navigator.mediaDevices
+  .getUserMedia({
+    video: {
+      facingMode: "environment"
+    },
+    audio: false
+  })
+  .then(stream => {
+    return { stream, recorder: new MediaRecorder(stream) };
+  })
+  .catch(function(err) {
+    console.log("An error occurred: " + err);
+  });
+
+socket.on("connect", () => {
+  console.log("connected");
+});
+socket.on("hi", data => {
+  console.log(data);
+});
+
+let chunks = [];
+const rawVideoWH = [640, 360];
+
 function App() {
-  const [rawVideoWH] = useState([640, 360]);
+  const [streamAndRecorder, setStreamAndRecorder] = useState(
+    {} as {
+      stream: MediaStream;
+      recorder: MediaRecorder;
+    }
+  );
   const [videoWH, setVideoWH] = useState([320, 180]);
-  const [paused, toggleVideo] = useState(false);
-  const videoRef = useRef();
+  const [paused, togglePaused] = useState(false);
+  const [recording, toggleRecording] = useState(false);
+  const videoSrc = useRef();
+  const videoRec = useRef();
+
   useEffect(() => {
-    navigator.mediaDevices
-      .getUserMedia({
-        video: {
-          facingMode: "environment"
-        },
-        audio: false
-      })
-      .then(function(stream) {
-        const video: HTMLVideoElement = videoRef.current;
-        console.log(video);
-        video.srcObject = stream;
-        video.play();
-      })
-      .catch(function(err) {
-        console.log("An error occurred: " + err);
+    const { stream, recorder } = streamAndRecorder;
+    if (!(stream && recorder)) {
+      streamAndRecorderPromise.then(streamAndRecorder => {
+        if (streamAndRecorder) {
+          setStreamAndRecorder(streamAndRecorder);
+        }
       });
+    } else if (videoSrc.current && videoRec.current) {
+      const video: HTMLVideoElement = videoSrc.current;
+      video.srcObject = stream;
+      video.play();
 
-    socket.on("connect", () => {
-      console.log("connected");
-    });
+      recorder.ondataavailable = e => {
+        chunks.push(e.data);
+        console.log(e.data.type);
+      };
+      recorder.onstop = e => {
+        const videoRecEl: HTMLVideoElement = videoRec.current;
+        const videoSrcEl: HTMLVideoElement = videoSrc.current;
+        if (videoRecEl) {
+          const blob = new Blob(chunks, {
+            type: "video/x-matroska;codecs=avc1"
+          });
+          chunks = [];
+          const videoObjectURL = window.URL.createObjectURL(blob);
+          videoRecEl.src = videoObjectURL;
+          socket.emit("video", blob);
+        }
+      };
+    }
+  }, [videoSrc.current, videoRec.current]);
 
-    socket.on("hi", data => {
-      console.log(data);
-    });
-  }, []);
-  console.log("rendered", videoRef);
-  const canPlay = () => {
-    // const video: HTMLVideoElement = videoRef.current
-    // if (video) {
-    //   const displayWidth = 500;
-    //   const displayHeight = video.videoHeight / (video.videoWidth / displayWidth);
-    //   setVideoWH([displayWidth, displayHeight]);
-    // }
-  };
+  console.log("rendered", videoSrc);
   return (
     <>
       Hello world!
-      <input type="text" onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          console.log('input change', e.currentTarget.value)
-          socket.emit('hi', e.currentTarget.value)
-        }
-      }}></input>
+      <input
+        type="text"
+        onKeyDown={e => {
+          if (e.key === "Enter") {
+            console.log("input change", e.currentTarget.value);
+            socket.emit("hi", e.currentTarget.value);
+          }
+        }}
+      ></input>
       <input
         type="range"
         max="100"
@@ -65,23 +99,47 @@ function App() {
       />
       <button
         onClick={() => {
-          const video: HTMLVideoElement = videoRef.current;
-          if (paused && video) {
+          const video: HTMLVideoElement = videoSrc.current;
+          if (video && video.paused) {
             video.play();
-            toggleVideo(false);
+            togglePaused(false);
           } else if (video) {
             video.pause();
-            toggleVideo(true);
+            togglePaused(true);
           }
         }}
       >
         {paused ? "继续视频" : "暂停视频"}
       </button>
+      <button
+        onClick={() => {
+          const videoRecEl: HTMLVideoElement = videoRec.current;
+          const videoSrcEl: HTMLVideoElement = videoSrc.current;
+          if (recording && videoRecEl) {
+            videoSrcEl.pause();
+            togglePaused(true);
+            
+            streamAndRecorder.recorder.stop();
+            toggleRecording(false);
+          } else if (videoRecEl) {
+            videoSrcEl.play();
+            togglePaused(false);
+
+            streamAndRecorder.recorder.start();
+            toggleRecording(true);
+          }
+        }}
+      >
+        {recording ? "停止录制" : "开始录制"}
+      </button>
+      <video ref={videoSrc} width={videoWH[0]} height={videoWH[1]}></video>
       <video
-        ref={videoRef}
+        ref={videoRec}
         width={videoWH[0]}
         height={videoWH[1]}
-        onCanPlay={canPlay}
+        onClick={e => {
+          e.currentTarget.play();
+        }}
       ></video>
       <canvas></canvas>
       <style jsx>{`
